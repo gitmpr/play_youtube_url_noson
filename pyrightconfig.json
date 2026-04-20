@@ -1,0 +1,7 @@
+{
+  "pythonVersion": "3.8",
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportUnusedVariable": "warning",
+  "reportUnusedImport": "warning"
+}

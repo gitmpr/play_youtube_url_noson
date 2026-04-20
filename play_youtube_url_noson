@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+
+import sys
+from pathlib import Path
+
+# Re-exec with venv Python if available, so tqdm and other deps are on the path
+_here = Path(__file__).resolve().parent
+_venv_python = _here / ".venv/bin/python3"
+if _venv_python.exists() and Path(sys.executable).resolve() != _venv_python.resolve():
+    import os
+    os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
+
+sys.path.insert(0, str(_here))
+
+import argparse
+import os
+import subprocess
+
+from yt_sonos import (
+    check_and_upgrade_ytdlp, check_dependencies, clean_youtube_url,
+    discover_sonos_speakers, download_audio, ensure_music_dir,
+    first_run_wizard, get_video_info, is_playlist_url, mp3_url,
+    resolve_speaker, resolve_url, start_http_server_daemon, is_http_server_running,
+)
+
+
+def play_on_sonos(speaker, mp3_file):
+    url = mp3_url(mp3_file)
+    subprocess.run(["sonos-discover"], capture_output=True)
+    subprocess.run(["sonos", "--use-local-speaker-list", speaker, "stop"], capture_output=True)
+    result = subprocess.run(
+        ["sonos", "--use-local-speaker-list", speaker, "play_uri", url],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Download YouTube video as MP3 and play on Sonos",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  play_youtube_url_noson
+  play_youtube_url_noson -u https://youtube.com/watch?v=...
+  play_youtube_url_noson -u youtube.com/watch?v=...
+  play_youtube_url_noson -s "Living Room"
+        """,
+    )
+    parser.add_argument("-u", "--url", help="YouTube URL (reads clipboard or prompts if not provided)")
+    parser.add_argument("-s", "--speaker", help="Sonos speaker/room name")
+    parser.add_argument("--list-speakers", action="store_true", help="List available speakers and exit")
+    parser.add_argument("--check-deps", action="store_true", help="Check dependencies and exit")
+    args = parser.parse_args()
+
+    if args.check_deps:
+        issues = check_dependencies()
+        if issues:
+            print("Missing dependencies:")
+            for issue in issues:
+                print(f"\n  {issue}")
+            sys.exit(1)
+        print("All dependencies OK.")
+        return
+
+    issues = check_dependencies()
+    if issues:
+        print("Missing dependencies (run --check-deps for details):")
+        for issue in issues:
+            print(f"  {issue.splitlines()[0]}")
+        sys.exit(1)
+
+    first_run_wizard()
+
+    if args.list_speakers:
+        print("Discovering Sonos speakers...")
+        speakers = discover_sonos_speakers()
+        if speakers:
+            for s in speakers:
+                print(f"  - {s}")
+        else:
+            print("  No speakers found.")
+            print("  Make sure your Sonos system is on and on the same network.")
+        return
+
+    print("YouTube to Sonos")
+
+    url = resolve_url(args.url)
+    if not url:
+        return
+
+    if is_playlist_url(url):
+        print("Playlist detected - delegating to queue_youtube_noson...")
+        cmd = ["queue_youtube_noson", "-u", url]
+        if args.speaker:
+            cmd += ["-s", args.speaker]
+        os.execvp("queue_youtube_noson", cmd)
+        return
+
+    url = clean_youtube_url(url)
+
+    title, duration = get_video_info(url)
+    if title:
+        print(f"{title} ({duration})")
+
+    speaker = resolve_speaker(args.speaker)
+    if not speaker:
+        return
+    print(f"Speaker: {speaker}")
+
+    if not ensure_music_dir():
+        return
+
+    check_and_upgrade_ytdlp()
+
+    if not is_http_server_running():
+        start_http_server_daemon()
+        if not is_http_server_running():
+            print("Could not start HTTP server!")
+            return
+
+    mp3_file, title = download_audio(url, title)
+    if not mp3_file:
+        return
+
+    if play_on_sonos(speaker, mp3_file):
+        print(f"Playing on {speaker}")
+    else:
+        print(f"Failed to start playback on {speaker}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+    except Exception as e:
+        print(f"Error: {e}")

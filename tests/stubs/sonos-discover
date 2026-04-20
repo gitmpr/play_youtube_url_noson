@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""
+Fake sonos-discover that returns a realistic speaker list for testing.
+Output format mirrors real soco-cli sonos-discover output.
+"""
+import sys
+from pathlib import Path
+
+LOG = Path("/tmp/sonos_stub.log")
+
+def log(msg):
+    with open(LOG, "a") as f:
+        f.write(msg + "\n")
+
+log("sonos-discover")
+
+# Real soco-cli discover output has lines with: ROOM_NAME IP_ADDRESS ... Visible
+print("""
+Sonos speaker discovery...
+
+  Living Room   192.168.1.100   Visible
+  Kitchen       192.168.1.101   Visible
+""")

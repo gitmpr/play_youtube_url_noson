@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""
+Realistic yt-dlp stub for testing.
+
+Handles all invocation modes used by yt_sonos.py:
+  1. --get-title [--get-duration]  → print title (and duration)
+  2. --flat-playlist --print       → print title<TAB>url per track
+  3. --extract-audio --audio-format mp3  → create a real silent MP3 via ffmpeg
+
+State is logged to /tmp/ytdlp_stub.log for test assertion.
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+LOG = Path("/tmp/ytdlp_stub.log")
+DOWNLOAD_COUNTER = Path("/tmp/ytdlp_stub_download_count")
+
+
+def log(msg):
+    with open(LOG, "a") as f:
+        f.write(msg + "\n")
+
+
+args = sys.argv[1:]
+log(f"yt-dlp {' '.join(args)}")
+
+# Mode 1: metadata query
+if "--get-title" in args:
+    print("Test Song For Integration Testing")
+    if "--get-duration" in args:
+        print("3:14")
+    sys.exit(0)
+
+# Mode 2: flat playlist listing
+if "--flat-playlist" in args:
+    for i in range(1, 4):
+        print(f"Playlist Track {i}\thttps://www.youtube.com/watch?v=fake{i:04d}")
+    sys.exit(0)
+
+# Mode 3: download + extract audio
+if "--extract-audio" in args:
+    # Increment per-process download counter and optionally fail on a specific track
+    count = int(DOWNLOAD_COUNTER.read_text()) + 1 if DOWNLOAD_COUNTER.exists() else 1
+    DOWNLOAD_COUNTER.write_text(str(count))
+    fail_track = os.environ.get("YTDLP_STUB_FAIL_TRACK")
+    if fail_track and count == int(fail_track):
+        log(f"STUB: simulating download failure for track {count}")
+        sys.exit(1)
+
+    output_template = None
+    for j, arg in enumerate(args):
+        if arg == "-o" and j + 1 < len(args):
+            output_template = args[j + 1]
+            break
+
+    if not output_template:
+        log("ERROR: no -o argument found")
+        sys.exit(1)
+
+    output_path = Path(output_template.replace("%(ext)s", "mp3"))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Emit progress lines if --newline is set (yt_sonos.py reads these for tqdm)
+    if "--newline" in args:
+        for pct in [10, 25, 50, 75, 100]:
+            print(f"[download]  {pct}.0% of ~1.00MiB at 5.00MiB/s ETA 00:00")
+            sys.stdout.flush()
+
+    # Generate a real 2-second silent MP3 using ffmpeg
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+            "-t", "2",
+            "-codec:a", "libmp3lame", "-q:a", "9",
+            str(output_path),
+            "-y", "-loglevel", "quiet",
+        ]
+    )
+
+    if result.returncode == 0:
+        log(f"Created {output_path}")
+    else:
+        log(f"ffmpeg failed with code {result.returncode}")
+
+    sys.exit(result.returncode)
+
+# Unhandled invocation — exit cleanly
+log(f"WARNING: unhandled invocation: {' '.join(args)}")
+sys.exit(0)

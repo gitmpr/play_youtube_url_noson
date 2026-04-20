@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""
+Queue YouTube videos to Sonos speaker queue.
+Downloads as MP3 and adds to the queue without interrupting current playback.
+"""
+
+import sys
+from pathlib import Path
+
+# Re-exec with venv Python if available, so tqdm and other deps are on the path
+_here = Path(__file__).resolve().parent
+_venv_python = _here / ".venv/bin/python3"
+if _venv_python.exists() and Path(sys.executable).resolve() != _venv_python.resolve():
+    import os
+    os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
+
+sys.path.insert(0, str(_here))
+
+import argparse
+import os
+import random
+import subprocess
+
+from yt_sonos import (
+    check_and_upgrade_ytdlp, check_dependencies, clean_youtube_url,
+    discover_sonos_speakers, download_audio, ensure_music_dir,
+    first_run_wizard, get_music_dir, get_video_info, is_http_server_running,
+    is_playlist_url, mp3_url, resolve_speaker, resolve_url, sanitize_filename,
+    start_http_server_daemon,
+)
+
+
+def get_playlist_entries(url):
+    try:
+        result = subprocess.run(
+            [
+                "yt-dlp", "--flat-playlist", "--no-warnings",
+                "--print", "%(title)s\t%(url)s",
+                url,
+            ],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        entries = []
+        for line in result.stdout.strip().split("\n"):
+            if "\t" in line:
+                title, video_url = line.split("\t", 1)
+                if "[Private" not in title and "[Deleted" not in title:
+                    entries.append({"title": title, "url": video_url})
+        return entries
+    except Exception as e:
+        print(f"Error fetching playlist: {e}")
+        return []
+
+
+def add_to_queue(speaker, mp3_file, position=None):
+    url = mp3_url(mp3_file)
+    cmd = ["sonos", "--use-local-speaker-list", speaker, "add_uri_to_queue", url]
+    if position:
+        cmd.append(str(position))
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def get_queue_length(speaker):
+    try:
+        result = subprocess.run(
+            ["sonos", "--use-local-speaker-list", speaker, "queue_length"],
+            capture_output=True, text=True, check=True,
+        )
+        return int(result.stdout.strip())
+    except Exception:
+        return 0
+
+
+def prepare_queue(speaker):
+    subprocess.run(["sonos-discover"], capture_output=True)
+    subprocess.run(["sonos", "--use-local-speaker-list", speaker, "stop"], capture_output=True)
+    subprocess.run(["sonos", "--use-local-speaker-list", speaker, "clear_queue"], capture_output=True)
+
+
+def play_queue_from_start(speaker):
+    subprocess.run(["sonos", "--use-local-speaker-list", speaker, "play_from_queue"], capture_output=True)
+
+
+def queue_single(url, speaker, args, quiet, title=None):
+    mp3_file, _title = download_audio(url, title=title, show_progress=not quiet)
+    if not mp3_file:
+        return
+
+    position = args.position
+    if args.play_next:
+        try:
+            result = subprocess.run(
+                ["sonos", "--use-local-speaker-list", speaker, "queue_position"],
+                capture_output=True, text=True,
+            )
+            position = int(result.stdout.strip()) + 1
+        except Exception:
+            position = 1
+
+    if not quiet:
+        print("Adding to queue...")
+
+    success = add_to_queue(speaker, mp3_file, position)
+    if success:
+        if not quiet:
+            if position:
+                print(f"Added to queue at position {position}")
+            else:
+                print(f"Added to queue (position {get_queue_length(speaker)})")
+        if args.play_next:
+            subprocess.run(["sonos", "--use-local-speaker-list", speaker, "next"], capture_output=True)
+            if not quiet:
+                print("Skipping to track...")
+    else:
+        print("Failed to add to queue!")
+
+
+def queue_playlist(url, speaker, args, quiet):
+    if not quiet:
+        print("Fetching playlist...")
+
+    entries = get_playlist_entries(url)
+    if not entries:
+        print("No tracks found in playlist!")
+        return
+
+    if args.shuffle:
+        random.shuffle(entries)
+    if args.limit > 0:
+        entries = entries[: args.limit]
+
+    total = len(entries)
+    if not quiet:
+        print(f"Playlist: {total} tracks")
+
+    queued = 0
+    failed = 0
+    playback_started = False
+
+    for i, entry in enumerate(entries, 1):
+        title = entry["title"]
+        video_url = entry["url"]
+
+        existing = get_music_dir() / f"{sanitize_filename(title)}.mp3"
+        if existing.exists():
+            mp3_file = existing
+            if not quiet:
+                print(f"[{i}/{total}] Cached: {title}")
+        else:
+            if not quiet:
+                print(f"[{i}/{total}] Downloading:")
+            mp3_file, _ = download_audio(video_url, title=title, show_progress=not quiet)
+
+        if not mp3_file:
+            if not quiet:
+                print(f"[{i}/{total}] Failed: {title}")
+            failed += 1
+            continue
+
+        if not playback_started and queued == 0:
+            prepare_queue(speaker)
+
+        if add_to_queue(speaker, mp3_file):
+            queued += 1
+            if not playback_started:
+                play_queue_from_start(speaker)
+                playback_started = True
+                if not quiet:
+                    print(f"Playing on {speaker} -- downloading remaining tracks...")
+        else:
+            if not quiet:
+                print(f"[{i}/{total}] Queue failed: {title}")
+            failed += 1
+
+    if not quiet:
+        print(f"\nDone: {queued} queued, {failed} failed")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Queue YouTube videos/playlists to Sonos speaker",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  queue_youtube_noson
+  queue_youtube_noson -u https://youtube.com/watch?v=...
+  queue_youtube_noson -u youtube.com/playlist?list=...
+  queue_youtube_noson -u "PLAYLIST_URL" --shuffle --limit 10
+  queue_youtube_noson -u "VIDEO_URL" --play-next
+        """,
+    )
+    parser.add_argument("-u", "--url", help="YouTube URL or playlist (reads clipboard or prompts if not provided)")
+    parser.add_argument("-s", "--speaker", help="Sonos speaker/room name")
+    parser.add_argument("-p", "--position", type=int, help="Queue position (1 = play next)")
+    parser.add_argument("--play-next", action="store_true", help="Add as next track and skip to it")
+    parser.add_argument("--shuffle", action="store_true", help="Shuffle playlist order before queuing")
+    parser.add_argument(
+        "--limit", type=int, default=0,
+        help="Max tracks to queue from a playlist (default: 0 = no limit)",
+    )
+    parser.add_argument("--list-speakers", action="store_true", help="List available speakers and exit")
+    parser.add_argument("--check-deps", action="store_true", help="Check dependencies and exit")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Minimal output")
+    args = parser.parse_args()
+
+    if args.check_deps:
+        issues = check_dependencies()
+        if issues:
+            print("Missing dependencies:")
+            for issue in issues:
+                print(f"\n  {issue}")
+            sys.exit(1)
+        print("All dependencies OK.")
+        return
+
+    issues = check_dependencies()
+    if issues:
+        print("Missing dependencies (run --check-deps for details):")
+        for issue in issues:
+            print(f"  {issue.splitlines()[0]}")
+        sys.exit(1)
+
+    first_run_wizard()
+
+    if args.list_speakers:
+        print("Discovering Sonos speakers...")
+        speakers = discover_sonos_speakers()
+        if speakers:
+            for s in speakers:
+                print(f"  - {s}")
+        else:
+            print("  No speakers found.")
+            print("  Make sure your Sonos system is on and on the same network.")
+        return
+
+    quiet = args.quiet
+    if not quiet:
+        print("Queue YouTube to Sonos")
+
+    url = resolve_url(args.url)
+    if not url:
+        return
+
+    single_title = None
+    if not is_playlist_url(url):
+        url = clean_youtube_url(url)
+        if not quiet:
+            single_title, duration = get_video_info(url)
+            if single_title:
+                print(f"{single_title} ({duration})")
+
+    speaker = resolve_speaker(args.speaker, quiet=quiet)
+    if not speaker:
+        return
+
+    if not quiet:
+        print(f"Speaker: {speaker}")
+
+    if not ensure_music_dir(quiet=quiet):
+        return
+
+    check_and_upgrade_ytdlp()
+
+    if not is_http_server_running():
+        if not quiet:
+            print("Starting HTTP server...")
+        start_http_server_daemon()
+
+    if not is_http_server_running():
+        print("Could not start HTTP server!")
+        return
+
+    if is_playlist_url(url):
+        queue_playlist(url, speaker, args, quiet)
+    else:
+        queue_single(url, speaker, args, quiet, title=single_title)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+    except Exception as e:
+        print(f"Error: {e}")

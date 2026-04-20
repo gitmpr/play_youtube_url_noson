@@ -1,0 +1,5 @@
+{
+  "default_speaker": "Living Room",
+  "music_dir": "~/Music/MP3",
+  "http_port": 8000
+}

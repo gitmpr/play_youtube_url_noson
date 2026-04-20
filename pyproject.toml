@@ -1,0 +1,15 @@
+[project]
+name = "youtube-to-sonos"
+version = "0.1.0"
+description = "Play YouTube audio on Sonos speakers via CLI"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "tqdm>=4.0",
+    "yt-dlp>=2024.1.1",
+    "soco-cli>=0.4.0",
+]
+
+[project.urls]
+Repository = "https://github.com/yourusername/play_youtube_url_noson"
+

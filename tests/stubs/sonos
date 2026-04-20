@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""
+Realistic soco-cli stub for testing.
+
+Simulates: stop, clear_queue, play_uri, add_uri_to_queue, queue_length,
+           queue_position, play_from_queue, next
+
+State is persisted to /tmp/sonos_stub_state.json so calls across subprocesses
+share the same simulated queue.
+"""
+import json
+import sys
+from pathlib import Path
+
+LOG = Path("/tmp/sonos_stub.log")
+STATE = Path("/tmp/sonos_stub_state.json")
+
+KNOWN_SPEAKERS = {"Living Room", "Kitchen"}
+
+
+def log(msg):
+    with open(LOG, "a") as f:
+        f.write(msg + "\n")
+
+
+def load_state():
+    if STATE.exists():
+        try:
+            return json.loads(STATE.read_text())
+        except Exception:
+            pass
+    return {"queue": [], "position": 0, "playing": False}
+
+
+def save_state(state):
+    STATE.write_text(json.dumps(state, indent=2))
+
+
+args = sys.argv[1:]
+log(f"sonos {' '.join(args)}")
+
+# Skip leading --flags (e.g. --use-local-speaker-list)
+i = 0
+while i < len(args) and args[i].startswith("--"):
+    i += 1
+
+if i >= len(args):
+    sys.exit(0)
+
+speaker = args[i]
+i += 1
+
+if speaker not in KNOWN_SPEAKERS:
+    log(f"ERROR: speaker '{speaker}' not found in speaker list")
+    print(f"Speaker '{speaker}' not found in speaker list", file=sys.stderr)
+    sys.exit(1)
+
+if i >= len(args):
+    sys.exit(0)
+
+command = args[i]
+i += 1
+rest = args[i:]
+
+state = load_state()
+
+if command == "stop":
+    state["playing"] = False
+    save_state(state)
+
+elif command == "clear_queue":
+    state["queue"] = []
+    state["position"] = 0
+    state["playing"] = False
+    save_state(state)
+
+elif command == "play_uri":
+    url = rest[0] if rest else ""
+    state["playing"] = True
+    state["current_uri"] = url
+    save_state(state)
+
+elif command == "add_uri_to_queue":
+    url = rest[0] if rest else ""
+    if len(rest) > 1:
+        try:
+            pos = int(rest[1])
+            state["queue"].insert(pos - 1, url)
+        except ValueError:
+            state["queue"].append(url)
+    else:
+        state["queue"].append(url)
+    save_state(state)
+
+elif command == "queue_length":
+    print(len(state["queue"]))
+
+elif command == "queue_position":
+    print(state.get("position", 0))
+
+elif command == "play_from_queue":
+    state["playing"] = True
+    state["position"] = 1
+    save_state(state)
+
+elif command == "next":
+    pos = state.get("position", 0)
+    state["position"] = min(pos + 1, len(state["queue"]))
+    save_state(state)
+
+else:
+    log(f"WARNING: unhandled command '{command}'")
+
+sys.exit(0)
