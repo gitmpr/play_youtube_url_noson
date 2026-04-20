@@ -13,8 +13,8 @@ serves it over a local HTTP server, and controls Sonos playback via soco-cli.
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/youtube-to-sonos
-cd youtube-to-sonos
+git clone https://github.com/gitmpr/play_youtube_url_noson
+cd play_youtube_url_noson
 ./install.sh
 ```
 
@@ -259,7 +259,7 @@ video may have geo or age restrictions. The error message will include a reason
 from yt-dlp. Manually upgrade yt-dlp:
 
 ```bash
-cd /path/to/youtube-to-sonos && uv sync --upgrade-package yt-dlp
+cd /path/to/play_youtube_url_noson && uv sync --upgrade-package yt-dlp
 ```
 
 **HTTP server returns 404**

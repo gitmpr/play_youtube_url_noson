@@ -28,7 +28,15 @@ ok "uv ($(uv --version))"
 
 # --- Install all Python deps into venv via uv ---
 cd "$REPO_DIR"
-uv sync --quiet
+uv sync
+VENV_PYTHON="${REPO_DIR}/.venv/bin/python3"
+for pkg in tqdm yt_dlp soco; do
+    if ! "$VENV_PYTHON" -c "import $pkg" 2>/dev/null; then
+        echo -e "${RED}ERROR:${NC} '$pkg' not found in venv after uv sync — something went wrong."
+        echo "       Try: uv sync --reinstall"
+        exit 1
+    fi
+done
 ok "Virtual environment ready (tqdm, yt-dlp, soco-cli installed)"
 
 # --- Make scripts executable ---
@@ -94,8 +102,6 @@ else
     echo -e "${GREEN}Setup complete.${NC}"
     echo ""
     echo "Next steps:"
-    echo "  1. Edit ${CONFIG_FILE} to set your speaker name"
-    echo "  2. Run: sonos-discover   (to see available room names)"
-    echo "  3. Run: play_youtube_url_noson --list-speakers"
-    echo "  4. Run: play_youtube_url_noson --help"
+    echo "  Run: play_youtube_url_noson"
+    echo "  (first run will guide you through speaker selection and config)"
 fi
