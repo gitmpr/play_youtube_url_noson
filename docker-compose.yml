@@ -1,0 +1,28 @@
+services:
+
+  # Integration tests against stubs (no real network needed)
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: none
+
+  # Live testing against real Sonos on the LAN.
+  # Uses host networking so the container shares the host's WiFi/ethernet
+  # interface — required for Sonos UPnP discovery and for the HTTP server
+  # to be reachable by the Sonos device.
+  live:
+    build:
+      context: .
+      dockerfile: Dockerfile.live
+    network_mode: host
+    volumes:
+      # Re-use the host config (speaker name, music dir, port).
+      - "${HOME}/.config/youtube_to_sonos_config.json:/root/.config/youtube_to_sonos_config.json:ro"
+      # Mount the MP3 library at the same absolute path the config references,
+      # so the path works inside the container without any translation.
+      - "${HOME}/Music/MP3:${HOME}/Music/MP3"
+    environment:
+      - TERM=xterm-256color
+    stdin_open: true
+    tty: true

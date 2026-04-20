@@ -1,0 +1,24 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 curl ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -sf /root/.local/bin/uv /usr/local/bin/uv
+
+WORKDIR /app
+
+COPY . .
+
+RUN bash install.sh
+
+ENV PATH="/root/.local/bin:/app/.venv/bin:$PATH"
+
+RUN mkdir -p /root/Music/MP3
+# The actual music dir path comes from the host config via a volume mount
+
+CMD ["bash"]
