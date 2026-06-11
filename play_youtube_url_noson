@@ -17,10 +17,10 @@ import os
 import subprocess
 
 from yt_sonos import (
-    check_and_upgrade_ytdlp, check_dependencies, clean_youtube_url,
+    add_to_queue, check_and_upgrade_ytdlp, check_dependencies, clean_youtube_url,
     discover_sonos_speakers, download_audio, ensure_music_dir,
-    first_run_wizard, get_video_info, is_playlist_url, mp3_url,
-    resolve_speaker, resolve_url, start_http_server_daemon, is_http_server_running,
+    first_run_wizard, get_queue_position, get_video_info, is_http_server_running,
+    is_playlist_url, mp3_url, resolve_speaker, resolve_url, start_http_server_daemon,
 )
 
 
@@ -45,10 +45,14 @@ Examples:
   play_youtube_url_noson -u https://youtube.com/watch?v=...
   play_youtube_url_noson -u youtube.com/watch?v=...
   play_youtube_url_noson -s "Living Room"
+  play_youtube_url_noson -u URL --play-next
+  play_youtube_url_noson -u URL --play-now
         """,
     )
     parser.add_argument("-u", "--url", help="YouTube URL (reads clipboard or prompts if not provided)")
     parser.add_argument("-s", "--speaker", help="Sonos speaker/room name")
+    parser.add_argument("--play-next", action="store_true", help="Insert after the current track (plays when current finishes)")
+    parser.add_argument("--play-now", action="store_true", help="Insert after the current track and skip to it immediately")
     parser.add_argument("--list-speakers", action="store_true", help="List available speakers and exit")
     parser.add_argument("--check-deps", action="store_true", help="Check dependencies and exit")
     args = parser.parse_args()
@@ -94,6 +98,10 @@ Examples:
         cmd = ["queue_youtube_noson", "-u", url]
         if args.speaker:
             cmd += ["-s", args.speaker]
+        if args.play_next:
+            cmd.append("--play-next")
+        if args.play_now:
+            cmd.append("--play-now")
         os.execvp("queue_youtube_noson", cmd)
         return
 
@@ -123,7 +131,17 @@ Examples:
     if not mp3_file:
         return
 
-    if play_on_sonos(speaker, mp3_file):
+    if args.play_next or args.play_now:
+        position = get_queue_position(speaker) + 1
+        print("Adding to queue...")
+        if add_to_queue(speaker, mp3_file, position):
+            print(f"Added to queue at position {position}")
+            if args.play_now:
+                subprocess.run(["sonos", "--use-local-speaker-list", speaker, "next"], capture_output=True)
+                print("Skipping to track...")
+        else:
+            print("Failed to add to queue!")
+    elif play_on_sonos(speaker, mp3_file):
         print(f"Playing on {speaker}")
     else:
         print(f"Failed to start playback on {speaker}")

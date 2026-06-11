@@ -694,3 +694,34 @@ def download_audio(url, title=None, show_progress=True):
 
 def mp3_url(mp3_file):
     return f"http://{get_local_ip()}:{HTTP_PORT}/{quote(mp3_file.name)}"
+
+
+def add_to_queue(speaker, mp3_file, position=None):
+    url = mp3_url(mp3_file)
+    cmd = ["sonos", "--use-local-speaker-list", speaker, "add_uri_to_queue", url]
+    if position:
+        cmd.append(str(position))
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def get_queue_length(speaker):
+    try:
+        result = subprocess.run(
+            ["sonos", "--use-local-speaker-list", speaker, "queue_length"],
+            capture_output=True, text=True, check=True,
+        )
+        return int(result.stdout.strip())
+    except Exception:
+        return 0
+
+
+def get_queue_position(speaker):
+    try:
+        result = subprocess.run(
+            ["sonos", "--use-local-speaker-list", speaker, "queue_position"],
+            capture_output=True, text=True, check=True,
+        )
+        return int(result.stdout.strip())
+    except Exception:
+        return 0

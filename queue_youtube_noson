@@ -22,11 +22,11 @@ import random
 import subprocess
 
 from yt_sonos import (
-    check_and_upgrade_ytdlp, check_dependencies, clean_youtube_url,
+    add_to_queue, check_and_upgrade_ytdlp, check_dependencies, clean_youtube_url,
     discover_sonos_speakers, download_audio, ensure_music_dir,
-    first_run_wizard, get_music_dir, get_video_info, is_http_server_running,
-    is_playlist_url, mp3_url, resolve_speaker, resolve_url, sanitize_filename,
-    start_http_server_daemon,
+    first_run_wizard, get_music_dir, get_queue_length, get_queue_position,
+    get_video_info, is_http_server_running, is_playlist_url, mp3_url,
+    resolve_speaker, resolve_url, sanitize_filename, start_http_server_daemon,
 )
 
 
@@ -52,25 +52,6 @@ def get_playlist_entries(url):
         return []
 
 
-def add_to_queue(speaker, mp3_file, position=None):
-    url = mp3_url(mp3_file)
-    cmd = ["sonos", "--use-local-speaker-list", speaker, "add_uri_to_queue", url]
-    if position:
-        cmd.append(str(position))
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.returncode == 0
-
-
-def get_queue_length(speaker):
-    try:
-        result = subprocess.run(
-            ["sonos", "--use-local-speaker-list", speaker, "queue_length"],
-            capture_output=True, text=True, check=True,
-        )
-        return int(result.stdout.strip())
-    except Exception:
-        return 0
-
 
 def prepare_queue(speaker):
     subprocess.run(["sonos-discover"], capture_output=True)
@@ -89,14 +70,7 @@ def queue_single(url, speaker, args, quiet, title=None):
 
     position = args.position
     if args.play_next or args.play_now:
-        try:
-            result = subprocess.run(
-                ["sonos", "--use-local-speaker-list", speaker, "queue_position"],
-                capture_output=True, text=True,
-            )
-            position = int(result.stdout.strip()) + 1
-        except Exception:
-            position = 1
+        position = get_queue_position(speaker) + 1
 
     if not quiet:
         print("Adding to queue...")
