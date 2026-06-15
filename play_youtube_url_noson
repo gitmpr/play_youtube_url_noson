@@ -14,25 +14,27 @@ sys.path.insert(0, str(_here))
 
 import argparse
 import os
-import subprocess
 
 from yt_sonos import (
     add_to_queue, check_and_upgrade_ytdlp, check_dependencies, clean_youtube_url,
-    discover_sonos_speakers, download_audio, ensure_music_dir,
+    describe_sonos_failure, discover_sonos_speakers, download_audio, ensure_music_dir,
     first_run_wizard, get_queue_position, get_video_info, is_http_server_running,
-    is_playlist_url, mp3_url, resolve_speaker, resolve_url, start_http_server_daemon,
+    is_playlist_url, mp3_url, resolve_speaker, resolve_url, run_sonos,
+    start_http_server_daemon,
 )
 
 
 def play_on_sonos(speaker, mp3_file):
+    """Play mp3_file on the speaker. Returns (success, error_message)."""
     url = mp3_url(mp3_file)
-    subprocess.run(["sonos-discover"], capture_output=True)
-    subprocess.run(["sonos", "--use-local-speaker-list", speaker, "stop"], capture_output=True)
-    result = subprocess.run(
-        ["sonos", "--use-local-speaker-list", speaker, "play_uri", url],
-        capture_output=True, text=True,
-    )
-    return result.returncode == 0
+    discover = run_sonos(["sonos-discover"])
+    if discover.returncode != 0:
+        return False, describe_sonos_failure("sonos-discover", discover)
+    run_sonos(["sonos", "--use-local-speaker-list", speaker, "stop"])
+    result = run_sonos(["sonos", "--use-local-speaker-list", speaker, "play_uri", url])
+    if result.returncode != 0:
+        return False, describe_sonos_failure(f"sonos play_uri on '{speaker}'", result)
+    return True, None
 
 
 def main():
@@ -134,17 +136,25 @@ Examples:
     if args.play_next or args.play_now:
         position = get_queue_position(speaker) + 1
         print("Adding to queue...")
-        if add_to_queue(speaker, mp3_file, position):
+        added, add_error = add_to_queue(speaker, mp3_file, position)
+        if added:
             print(f"Added to queue at position {position}")
             if args.play_now:
-                subprocess.run(["sonos", "--use-local-speaker-list", speaker, "next"], capture_output=True)
+                run_sonos(["sonos", "--use-local-speaker-list", speaker, "next"])
                 print("Skipping to track...")
         else:
             print("Failed to add to queue!")
-    elif play_on_sonos(speaker, mp3_file):
+            if add_error:
+                print(add_error)
+        return
+
+    success, play_error = play_on_sonos(speaker, mp3_file)
+    if success:
         print(f"Playing on {speaker}")
     else:
         print(f"Failed to start playback on {speaker}")
+        if play_error:
+            print(play_error)
 
 
 if __name__ == "__main__":

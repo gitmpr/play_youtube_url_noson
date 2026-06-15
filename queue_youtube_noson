@@ -23,10 +23,10 @@ import subprocess
 
 from yt_sonos import (
     add_to_queue, check_and_upgrade_ytdlp, check_dependencies, clean_youtube_url,
-    discover_sonos_speakers, download_audio, ensure_music_dir,
+    describe_sonos_failure, discover_sonos_speakers, download_audio, ensure_music_dir,
     first_run_wizard, get_music_dir, get_queue_length, get_queue_position,
     get_video_info, is_http_server_running, is_playlist_url, mp3_url,
-    resolve_speaker, resolve_url, sanitize_filename, start_http_server_daemon,
+    resolve_speaker, resolve_url, run_sonos, sanitize_filename, start_http_server_daemon,
 )
 
 
@@ -54,13 +54,17 @@ def get_playlist_entries(url):
 
 
 def prepare_queue(speaker):
-    subprocess.run(["sonos-discover"], capture_output=True)
-    subprocess.run(["sonos", "--use-local-speaker-list", speaker, "stop"], capture_output=True)
-    subprocess.run(["sonos", "--use-local-speaker-list", speaker, "clear_queue"], capture_output=True)
+    """Discover, stop and clear the speaker's queue. Returns (ok, error_message)."""
+    discover = run_sonos(["sonos-discover"])
+    if discover.returncode != 0:
+        return False, describe_sonos_failure("sonos-discover", discover)
+    run_sonos(["sonos", "--use-local-speaker-list", speaker, "stop"])
+    run_sonos(["sonos", "--use-local-speaker-list", speaker, "clear_queue"])
+    return True, None
 
 
 def play_queue_from_start(speaker):
-    subprocess.run(["sonos", "--use-local-speaker-list", speaker, "play_from_queue"], capture_output=True)
+    run_sonos(["sonos", "--use-local-speaker-list", speaker, "play_from_queue"])
 
 
 def queue_single(url, speaker, args, quiet, title=None):
@@ -75,7 +79,7 @@ def queue_single(url, speaker, args, quiet, title=None):
     if not quiet:
         print("Adding to queue...")
 
-    success = add_to_queue(speaker, mp3_file, position)
+    success, error = add_to_queue(speaker, mp3_file, position)
     if success:
         if not quiet:
             if position:
@@ -83,11 +87,13 @@ def queue_single(url, speaker, args, quiet, title=None):
             else:
                 print(f"Added to queue (position {get_queue_length(speaker)})")
         if args.play_now:
-            subprocess.run(["sonos", "--use-local-speaker-list", speaker, "next"], capture_output=True)
+            run_sonos(["sonos", "--use-local-speaker-list", speaker, "next"])
             if not quiet:
                 print("Skipping to track...")
     else:
         print("Failed to add to queue!")
+        if error:
+            print(error)
 
 
 def queue_playlist(url, speaker, args, quiet):
@@ -133,9 +139,14 @@ def queue_playlist(url, speaker, args, quiet):
             continue
 
         if not playback_started and queued == 0:
-            prepare_queue(speaker)
+            prepared, prepare_error = prepare_queue(speaker)
+            if not prepared:
+                print(f"Cannot prepare the queue on {speaker}:")
+                print(prepare_error)
+                return
 
-        if add_to_queue(speaker, mp3_file):
+        added, add_error = add_to_queue(speaker, mp3_file)
+        if added:
             queued += 1
             if not playback_started:
                 play_queue_from_start(speaker)
@@ -145,6 +156,8 @@ def queue_playlist(url, speaker, args, quiet):
         else:
             if not quiet:
                 print(f"[{i}/{total}] Queue failed: {title}")
+                if add_error:
+                    print(add_error)
             failed += 1
 
     if not quiet:

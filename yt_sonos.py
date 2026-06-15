@@ -696,13 +696,45 @@ def mp3_url(mp3_file):
     return f"http://{get_local_ip()}:{HTTP_PORT}/{quote(mp3_file.name)}"
 
 
+def run_sonos(args, **kwargs):
+    """Run a soco-cli command (sonos/sonos-discover), capturing its output.
+
+    Returns the CompletedProcess. Use describe_sonos_failure() to turn a
+    non-zero result into a human-readable explanation.
+    """
+    return subprocess.run(args, capture_output=True, text=True, **kwargs)
+
+
+def describe_sonos_failure(label, result):
+    """Build a readable error message from a failed soco-cli CompletedProcess.
+
+    soco-cli prints actionable errors (e.g. "Speaker 'X' not found") to its
+    output but exits non-zero; callers previously discarded both. This surfaces
+    that text, and special-cases the broken-install symptom so the fix is obvious.
+    """
+    detail = (result.stderr or result.stdout or "").strip()
+    if "No module named 'soco_cli'" in detail or "ModuleNotFoundError" in detail:
+        return (
+            f"{label} failed: the soco-cli command-line tool is broken.\n"
+            "  Its virtualenv was built for a Python version that no longer exists\n"
+            "  (likely an OS Python upgrade). Re-run install.sh, or: uv sync --reinstall"
+        )
+    if not detail:
+        detail = f"exit code {result.returncode} with no output"
+    indented = detail.replace("\n", "\n  ")
+    return f"{label} failed:\n  {indented}"
+
+
 def add_to_queue(speaker, mp3_file, position=None):
+    """Add mp3_file to the speaker's queue. Returns (success, error_message)."""
     url = mp3_url(mp3_file)
     cmd = ["sonos", "--use-local-speaker-list", speaker, "add_uri_to_queue", url]
     if position:
         cmd.append(str(position))
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.returncode == 0
+    result = run_sonos(cmd)
+    if result.returncode != 0:
+        return False, describe_sonos_failure(f"sonos add_uri_to_queue on '{speaker}'", result)
+    return True, None
 
 
 def get_queue_length(speaker):
