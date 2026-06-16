@@ -90,10 +90,10 @@ the project runs as plain Linux.
 
 ## 2. Movability of the repository directory
 
-The repo directory is **not** freely movable today, and this already bit us
-once: the repo was created at `github.com/play_youtube_url_noson`, later moved
-under `github.com/gitmpr/`, and the in-tree `.venv` carried stale absolute
-paths that broke `sonos` and `yt-dlp` with `bad interpreter: No such file`.
+The repo directory is **not** freely movable today, and this already bit this
+project once: it was created at one path, later moved into a deeper namespace,
+and the in-tree `.venv` carried stale absolute paths that broke `sonos` and
+`yt-dlp` with `bad interpreter: No such file`.
 
 ### Why moving breaks the venv
 
@@ -331,3 +331,68 @@ no system-Python coupling, no relocatable-venv problem, and no manual symlink
 wiring. The cost is maintaining a flake and (for Route B) a uv-to-Nix bridge.
 The remaining non-portable surface is Windows, which Nix does not address and
 which would still require the code-level changes in section 1.
+
+---
+
+## 5. C library (libc) and ABI compatibility
+
+The sections above treat "Linux" as one target, but Linux ships three different C
+libraries, and the project's runtime closure is bound to whichever one it was
+built against:
+
+- **glibc** — mainstream distros (Ubuntu, Debian, Fedora, Arch).
+- **musl** — Alpine and most minimal container images.
+- **bionic** — Android / Termux.
+
+The project's own code (the launchers and `yt_sonos.py`) is pure Python and
+libc-agnostic. The libc dependence enters entirely through the *closure*: the
+interpreter, the native wheels, and `ffmpeg`.
+
+### Where libc bites
+
+- **uv-managed CPython.** uv does not compile Python; it downloads a
+  python-build-standalone binary, published per `(architecture, libc)` target
+  (`x86_64-unknown-linux-gnu` for glibc, `x86_64-unknown-linux-musl` for musl,
+  plus the aarch64 variants). uv selects the right one for the host, but the glibc
+  build also assumes a minimum host glibc version, and **there is no bionic
+  build** at all.
+- **Native wheels.** `soco-cli` pulls `cryptography`, and `yt-dlp` pulls
+  `curl-cffi`/`curl-impersonate` — both ship compiled extensions as `manylinux`
+  (glibc) or `musllinux` (musl) wheels. pip/uv pick the matching tag per platform.
+  There is no bionic wheel tag; on native Termux you would build from source
+  against bionic or use Termux's own packaged versions.
+- **ffmpeg** is a native binary linked against its own libc.
+
+### Consequence for movability (extends section 2)
+
+A built `.venv`, or any copied closure, is **not portable across libc families**,
+and often not even across glibc *versions* (a venv built on a newer glibc fails on
+an older host with `GLIBC_x.xx not found`). This reinforces the "regenerate, do
+not move" rule: `uv sync` on the target host fetches the libc variant that host
+needs. Copying the tree between a glibc laptop and an Alpine container, or to
+Android, will not work; re-syncing will.
+
+### Android / Termux specifically
+
+Native bionic is the hardest target: no standalone Python, no manylinux/musllinux
+wheels, no prebuilt `cryptography`/`curl-cffi`. The practical path on Android is a
+proot'd glibc userland (nix-on-droid, or proot-distro), where everything behaves
+like ordinary glibc Linux. So "running this on Android" in practice means "running
+it inside a glibc sandbox on Android," not on native bionic.
+
+### Nix angle
+
+On a glibc host, Nix brings its **own** glibc into the store and links every
+binary in the closure against it, so nix-built binaries are independent of the
+host glibc version — no `GLIBC_x.xx` mismatch, which is a real robustness gain
+over the uv standalone build that depends on the host glibc baseline. musl is
+available through the nixpkgs musl overlay but is niche; Android is again the
+nix-on-droid proot-glibc route. So Nix narrows the libc problem on glibc systems
+but does not make a single closure span glibc/musl/bionic.
+
+### Net
+
+The libc dimension does not change the code, but it bounds what "portable" means:
+the project is portable, its dependency closure is libc-specific, and the answer
+on every front is the same as for directory moves: rebuild per platform rather
+than copy a built environment.
