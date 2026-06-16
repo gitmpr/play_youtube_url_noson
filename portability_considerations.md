@@ -282,6 +282,48 @@ enough to start; an override can pin an exact version if needed.
    `aarch64-darwin` / `x86_64-darwin`, giving a single declarative definition
    for both Linux and macOS, with Homebrew no longer needed for `ffmpeg`.
 
+### devenv: separating the dev environment from the packaging strategy
+
+Route A/B above treat packaging and the dev shell as one flake. A cleaner mental
+model splits the two concerns explicitly, and [devenv](https://devenv.sh) is built
+around exactly that split:
+
+- **Development environment** — `devenv` with its Python integration manages the
+  interpreter and lets `uv` handle local dependency resolution, so day-to-day
+  iteration stays fast and lockfile-driven:
+
+  ```nix
+  languages.python = {
+    enable = true;
+    version = "3.13";
+    uv.enable = true;
+    uv.sync.enable = true;   # runs `uv sync` on shell entry
+  };
+  ```
+
+- **Packaging output** — the production package is built from `pyproject.toml` +
+  `uv.lock` via uv2nix, exposed as a devenv `outputs.*` attribute. This is Route B
+  by another name: the package and the dev shell share one source of truth
+  (`uv.lock`), so `soco-cli`/`yt-dlp` come from the locked versions we actually
+  test with, not from whatever nixpkgs happens to ship.
+
+The appeal is the single split: `uv` drives both layers (fast dev sync, exact
+packaging), and the wrapper's runtime closure then only needs the non-Python
+tools (`ffmpeg`, clipboard), since `sonos`/`yt-dlp` are console scripts in the
+uv2nix-built environment.
+
+Caveats:
+
+- This is heavier than the ~40-line Route A flake: extra inputs (devenv, uv2nix,
+  pyproject-nix) and likely a few uv2nix build-system overrides, because
+  `soco-cli` pulls `cryptography`/`fastapi`/`uvicorn` which sometimes need
+  fixups. For a three-file project it is arguably over-engineered, but it is a
+  clean reference for the "one lockfile, two consumers" pattern.
+- The exact devenv API for the packaging output (e.g. a
+  `languages.python`-provided build helper vs. wiring uv2nix directly) has moved
+  across devenv releases. Verify it against the current devenv docs before
+  relying on a specific attribute name; the dev-side `uv.sync.enable` is stable.
+
 ### Net effect
 
 After this, the failure modes that motivated this document disappear: there is
